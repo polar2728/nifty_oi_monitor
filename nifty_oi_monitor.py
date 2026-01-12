@@ -29,6 +29,10 @@ fyers = fyersModel.FyersModel(
     log_path=""
 )
 
+print("DEBUG_MODE raw:", os.environ.get("DEBUG_MODE"))
+print("DEBUG_MODE parsed:", DEBUG_MODE)
+print("CLIENT_ID raw:", os.environ.get("CLIENT_ID"))
+
 # ================= HELPERS =================
 def now_ist():
     return datetime.now(IST)
@@ -100,8 +104,8 @@ def get_current_weekly_expiry(expiry_list):
 # ================= SCAN =================
 def scan():
     if CHECK_MARKET_HOURS and not is_market_open():
+        print("⏱ Market closed")
         if DEBUG_MODE:
-            print("⏱ Market closed")
             send_telegram_alert("⏱ Market closed")
         return
 

@@ -1,0 +1,39 @@
+name: NIFTY OI Spike Monitor
+
+on:
+  schedule:
+    - cron: "*/5 9-15 * * 1-5"  # Every 5 mins during market hours
+  workflow_dispatch:
+
+jobs:
+  scan:
+    runs-on: ubuntu-latest
+    env:
+      CLIENT_ID: ${{ secrets.CLIENT_ID }}
+      ACCESS_TOKEN: ${{ secrets.ACCESS_TOKEN }}
+      TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
+      TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v3
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install fyers-apiv3 pandas requests
+
+      - name: Cache baseline file
+        uses: actions/cache@v3
+        with:
+          path: baseline_oi.json
+          key: baseline-oi-${{ runner.os }}
+          restore-keys: |
+            baseline-oi-
+
+      - name: Run NIFTY OI Scan
+        run: python nifty_oi_alert_telegram.py

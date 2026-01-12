@@ -6,7 +6,7 @@ from fyers_apiv3 import fyersModel
 import requests
 
 # ================= CONFIG =================
-OI_SPIKE_THRESHOLD  = 500
+OI_SPIKE_THRESHOLD  = 0
 MIN_BASE_OI         = 1000
 STRIKE_RANGE_POINTS = 100
 CHECK_MARKET_HOURS  = False

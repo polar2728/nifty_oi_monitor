@@ -100,8 +100,8 @@ def get_current_weekly_expiry(expiry_list):
 # ================= SCAN =================
 def scan():
     if CHECK_MARKET_HOURS and not is_market_open():
-        print("⏱ Market closed")
         if DEBUG_MODE:
+            print("⏱ Market closed")
             send_telegram_alert("⏱ Market closed")
         return
 

@@ -10,12 +10,12 @@ jobs:
   scan:
     runs-on: ubuntu-latest
     env:
+      DEBUG_MODE: ${{ vars.DEBUG_MODE }}
+      OI_SPIKE_THRESHOLD: ${{ vars.OI_SPIKE_THRESHOLD }}  
       CLIENT_ID: ${{ secrets.CLIENT_ID }}
       ACCESS_TOKEN: ${{ secrets.ACCESS_TOKEN }}
       TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
       TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
-      OI_SPIKE_THRESHOLD: 300  # % change to alert
-      DEBUG_MODE: "False"      # Set to True to print debug messages
     steps:
       - name: Checkout repo
         uses: actions/checkout@v3

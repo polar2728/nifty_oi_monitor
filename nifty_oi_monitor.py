@@ -29,10 +29,6 @@ fyers = fyersModel.FyersModel(
     log_path=""
 )
 
-print("DEBUG_MODE raw:", os.environ.get("DEBUG_MODE"))
-print("DEBUG_MODE parsed:", DEBUG_MODE)
-print("CLIENT_ID raw:", os.environ.get("CLIENT_ID"))
-
 # ================= HELPERS =================
 def now_ist():
     return datetime.now(IST)

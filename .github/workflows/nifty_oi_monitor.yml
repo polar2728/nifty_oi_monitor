@@ -2,7 +2,8 @@ name: NIFTY OI Spike Monitor
 
 on:
   schedule:
-    - cron: "*/1 * * * *"  # Every 5 mins during market hours
+    # Every 5 mins UTC 3:45-10:00 = 09:15-15:30 IST, Mon-Fri
+    - cron: "*/5 3-10 * * 1-5"
   workflow_dispatch:
 
 jobs:
@@ -13,6 +14,8 @@ jobs:
       ACCESS_TOKEN: ${{ secrets.ACCESS_TOKEN }}
       TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
       TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+      OI_SPIKE_THRESHOLD: 300  # % change to alert
+      DEBUG_MODE: "False"      # Set to True to print debug messages
     steps:
       - name: Checkout repo
         uses: actions/checkout@v3
@@ -23,9 +26,7 @@ jobs:
           python-version: "3.11"
 
       - name: Install dependencies
-        run: |
-          python -m pip install --upgrade pip
-          pip install fyers-apiv3 pandas requests
+        run: pip install fyers-apiv3 pandas requests
 
       - name: Cache baseline file
         uses: actions/cache@v3

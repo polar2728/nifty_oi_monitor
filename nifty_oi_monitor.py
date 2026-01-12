@@ -6,20 +6,21 @@ from fyers_apiv3 import fyersModel
 import requests
 
 # ================= CONFIG =================
-OI_SPIKE_THRESHOLD  = 0
+OI_SPIKE_THRESHOLD  = float(os.environ.get("OI_SPIKE_THRESHOLD", 300))  # % change to trigger alert
 MIN_BASE_OI         = 1000
 STRIKE_RANGE_POINTS = 100
-CHECK_MARKET_HOURS  = False
+CHECK_MARKET_HOURS  = True
 BASELINE_FILE       = "baseline_oi.json"
+DEBUG_MODE          = os.environ.get("DEBUG_MODE", "False").lower() == "true"
 
 # ================= TIMEZONE =================
 IST = timezone(timedelta(hours=5, minutes=30))
 
 # ================= SECRETS / ENV VARS =================
-CLIENT_ID    = os.environ["CLIENT_ID"]
-ACCESS_TOKEN = os.environ["ACCESS_TOKEN"]
-TELEGRAM_TOKEN = os.environ["TELEGRAM_TOKEN"]
-TELEGRAM_CHAT_ID = os.environ["TELEGRAM_CHAT_ID"]
+CLIENT_ID       = os.environ["CLIENT_ID"]
+ACCESS_TOKEN    = os.environ["ACCESS_TOKEN"]
+TELEGRAM_TOKEN  = os.environ["TELEGRAM_TOKEN"]
+TELEGRAM_CHAT_ID= os.environ["TELEGRAM_CHAT_ID"]
 
 # ================= FYERS =================
 fyers = fyersModel.FyersModel(
@@ -44,10 +45,12 @@ def send_telegram_alert(message):
     payload = {"chat_id": TELEGRAM_CHAT_ID, "text": message, "parse_mode": "Markdown"}
     try:
         r = requests.post(url, data=payload, timeout=10)
+        if DEBUG_MODE:
+            print("Telegram API Response:", r.status_code, r.text)
         if r.status_code == 200:
             print("✅ Telegram alert sent")
         else:
-            print("❌ Telegram alert failed:", r.text)
+            print("❌ Telegram alert failed")
     except Exception as e:
         print("❌ Telegram alert exception:", e)
 
@@ -56,7 +59,7 @@ def load_baseline():
     if os.path.exists(BASELINE_FILE):
         with open(BASELINE_FILE, "r") as f:
             return json.load(f)
-    return {"prev_oi": {}, "last_run_date": None}
+    return {"prev_oi": {}, "last_run_date": None, "first_alert_sent": False}
 
 def save_baseline(baseline):
     with open(BASELINE_FILE, "w") as f:
@@ -68,6 +71,7 @@ def reset_on_new_day(baseline):
         print("🔄 New trading day → resetting baseline")
         baseline["prev_oi"] = {}
         baseline["last_run_date"] = today_str
+        baseline["first_alert_sent"] = False
     return baseline
 
 # ================= API CALLS =================
@@ -112,10 +116,10 @@ def scan():
         print("⏱ Market is closed (filter enabled)")
         return
 
-    # Load baseline
     baseline = load_baseline()
     baseline = reset_on_new_day(baseline)
     prev_oi = baseline.get("prev_oi", {})
+    first_alert_sent = baseline.get("first_alert_sent", False)
 
     spot = get_nifty_spot()
     if spot is None:
@@ -123,7 +127,8 @@ def scan():
         return
 
     atm = int(round(spot / 50) * 50)
-    print(f"📊 NIFTY Spot: {spot}, ATM Strike: {atm}")
+    if DEBUG_MODE:
+        print(f"📊 NIFTY Spot: {spot}, ATM Strike: {atm}")
 
     raw, expiry_info = fetch_option_chain()
     if not raw:
@@ -150,19 +155,28 @@ def scan():
         prev = prev_oi.get(key, 0)
         oi_pct = ((oi - prev) / prev * 100) if prev >= MIN_BASE_OI else 0
 
-        if abs(oi_pct) > OI_SPIKE_THRESHOLD:
+        # First alert of the day when market opens
+        if not first_alert_sent and prev >= MIN_BASE_OI:
+            alerts.append(f"⚡ First baseline capture: {opt} {strike} → {oi}")
+
+        # Alert if OI% exceeds threshold
+        if oi_pct >= OI_SPIKE_THRESHOLD:
             alerts.append(f"{opt} {strike}: OI spike {oi_pct:+.1f}% (Prev {prev} → Current {oi})")
 
-        prev_oi[key] = oi
+        # Update baseline only if current OI is higher than previous baseline
+        prev_oi[key] = max(prev, oi)
 
-    # Save baseline
+    # Mark that first alert has been sent
+    if not first_alert_sent:
+        baseline["first_alert_sent"] = True
+
     baseline["prev_oi"] = prev_oi
     save_baseline(baseline)
 
     if alerts:
-        alert_msg = f"*NIFTY OI Spike Alert ({now_ist().strftime('%H:%M')})*\n" + "\n".join(alerts)
-        send_telegram_alert(alert_msg)
-    else:
+        message = f"*NIFTY OI Spike Alert ({now_ist().strftime('%H:%M')})*\n" + "\n".join(alerts)
+        send_telegram_alert(message)
+    elif DEBUG_MODE:
         print("✅ No significant OI spikes detected.")
 
 if __name__ == "__main__":

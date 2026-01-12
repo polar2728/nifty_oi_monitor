@@ -6,7 +6,7 @@ from fyers_apiv3 import fyersModel
 import requests
 
 # ================= CONFIG =================
-OI_SPIKE_THRESHOLD  = float(os.environ.get("OI_SPIKE_THRESHOLD", 300))  # % change to trigger alert
+OI_SPIKE_THRESHOLD  = float(os.environ.get("OI_SPIKE_THRESHOLD", 300))
 MIN_BASE_OI         = 1000
 STRIKE_RANGE_POINTS = 100
 CHECK_MARKET_HOURS  = True
@@ -16,11 +16,11 @@ DEBUG_MODE          = os.environ.get("DEBUG_MODE", "False").lower() == "true"
 # ================= TIMEZONE =================
 IST = timezone(timedelta(hours=5, minutes=30))
 
-# ================= SECRETS / ENV VARS =================
-CLIENT_ID       = os.environ["CLIENT_ID"]
-ACCESS_TOKEN    = os.environ["ACCESS_TOKEN"]
-TELEGRAM_TOKEN  = os.environ["TELEGRAM_TOKEN"]
-TELEGRAM_CHAT_ID= os.environ["TELEGRAM_CHAT_ID"]
+# ================= SECRETS =================
+CLIENT_ID        = os.environ["CLIENT_ID"]
+ACCESS_TOKEN     = os.environ["ACCESS_TOKEN"]
+TELEGRAM_TOKEN   = os.environ["TELEGRAM_TOKEN"]
+TELEGRAM_CHAT_ID = os.environ["TELEGRAM_CHAT_ID"]
 
 # ================= FYERS =================
 fyers = fyersModel.FyersModel(
@@ -42,142 +42,147 @@ def send_telegram_alert(message):
         print("⚠️ Telegram alert skipped: missing token/chat_id")
         return
     url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
-    payload = {"chat_id": TELEGRAM_CHAT_ID, "text": message, "parse_mode": "Markdown"}
-    try:
-        r = requests.post(url, data=payload, timeout=10)
-        if DEBUG_MODE:
-            print("Telegram API Response:", r.status_code, r.text)
-        if r.status_code == 200:
-            print("✅ Telegram alert sent")
-        else:
-            print("❌ Telegram alert failed")
-    except Exception as e:
-        print("❌ Telegram alert exception:", e)
+    payload = {
+        "chat_id": TELEGRAM_CHAT_ID,
+        "text": message,
+        "parse_mode": "Markdown"
+    }
+    r = requests.post(url, data=payload, timeout=10)
+    if DEBUG_MODE:
+        print("Telegram:", r.status_code, r.text)
 
 # ================= BASELINE =================
 def load_baseline():
     if os.path.exists(BASELINE_FILE):
         with open(BASELINE_FILE, "r") as f:
             return json.load(f)
-    return {"prev_oi": {}, "last_run_date": None, "first_alert_sent": False}
+    return {"date": None, "data": {}, "first_alert_sent": False}
 
-def save_baseline(baseline):
+def save_baseline(b):
     with open(BASELINE_FILE, "w") as f:
-        json.dump(baseline, f)
+        json.dump(b, f, indent=2)
 
-def reset_on_new_day(baseline):
-    today_str = now_ist().date().isoformat()
-    if baseline.get("last_run_date") != today_str:
-        print("🔄 New trading day → resetting baseline")
-        baseline["prev_oi"] = {}
-        baseline["last_run_date"] = today_str
-        baseline["first_alert_sent"] = False
-    return baseline
+def reset_on_new_day(b):
+    today = now_ist().date().isoformat()
+    if b.get("date") != today:
+        print("🔄 New trading day → baseline reset")
+        b["date"] = today
+        b["data"] = {}
+        b["first_alert_sent"] = False
+        save_baseline(b)
+    return b
 
 # ================= API CALLS =================
 def get_nifty_spot():
     q = fyers.quotes({"symbols": "NSE:NIFTY50-INDEX"})
-    if q.get("s") == "ok" and q.get("d"):
-        return round(q["d"][0]["v"]["lp"])
-    return None
+    return round(q["d"][0]["v"]["lp"])
 
 def fetch_option_chain():
-    resp = fyers.optionchain({
+    r = fyers.optionchain({
         "symbol": "NSE:NIFTY50-INDEX",
         "strikecount": 40,
         "timestamp": ""
     })
-    if resp.get("s") != "ok":
-        return None, None
-    data = resp["data"]
-    return data.get("optionsChain", []), data.get("expiryData", [])
+    return r["data"]["optionsChain"], r["data"]["expiryData"]
 
 def expiry_to_symbol_format(date_str):
-    try:
-        d = datetime.strptime(date_str, "%d-%m-%Y")
-        return d.strftime("%y") + str(d.month) + d.strftime("%d")
-    except:
-        return None
+    d = datetime.strptime(date_str, "%d-%m-%Y")
+    return d.strftime("%y") + str(d.month) + d.strftime("%d")
 
 def get_current_weekly_expiry(expiry_list):
     today = now_ist().date()
-    candidates = []
-    for exp in expiry_list:
-        try:
-            exp_date = datetime.fromtimestamp(int(exp["expiry"])).date()
-            candidates.append(((exp_date - today).days, exp["date"]))
-        except:
-            pass
-    return sorted(candidates)[0][1] if candidates else None
+    expiries = []
+    for e in expiry_list:
+        exp = datetime.fromtimestamp(int(e["expiry"])).date()
+        expiries.append((exp - today).days, e["date"])
+    return sorted(expiries)[0][1]
 
 # ================= SCAN =================
 def scan():
     if CHECK_MARKET_HOURS and not is_market_open():
-        print("⏱ Market is closed (filter enabled)")
+        print("⏱ Market closed")
         return
 
-    baseline = load_baseline()
-    baseline = reset_on_new_day(baseline)
-    prev_oi = baseline.get("prev_oi", {})
-    first_alert_sent = baseline.get("first_alert_sent", False)
+    baseline = reset_on_new_day(load_baseline())
 
     spot = get_nifty_spot()
-    if spot is None:
-        print("❌ Failed to fetch NIFTY spot")
-        return
-
     atm = int(round(spot / 50) * 50)
-    if DEBUG_MODE:
-        print(f"📊 NIFTY Spot: {spot}, ATM Strike: {atm}")
 
     raw, expiry_info = fetch_option_chain()
-    if not raw:
-        print("❌ Option chain unavailable")
-        return
-
-    expiry = get_current_weekly_expiry(expiry_info)
-    expiry_filter = expiry_to_symbol_format(expiry) or expiry
+    expiry = expiry_to_symbol_format(get_current_weekly_expiry(expiry_info))
 
     df = pd.DataFrame(raw)
-    df = df[df["symbol"].str.contains(expiry_filter, regex=False, na=False)]
+    df = df[df["symbol"].str.contains(expiry, regex=False)]
     df = df[
         (df["strike_price"] >= atm - STRIKE_RANGE_POINTS) &
         (df["strike_price"] <= atm + STRIKE_RANGE_POINTS)
     ]
 
-    alerts = []
+    alerts_ce = []
+    alerts_pe = []
 
     for _, r in df.iterrows():
         strike = int(r.strike_price)
         opt = r.option_type
         oi = int(r.oi)
         key = f"{opt}_{strike}"
-        prev = prev_oi.get(key, 0)
-        oi_pct = ((oi - prev) / prev * 100) if prev >= MIN_BASE_OI else 0
 
-        # First alert of the day when market opens
-        if not first_alert_sent and prev >= MIN_BASE_OI:
-            alerts.append(f"⚡ First baseline capture: {opt} {strike} → {oi}")
+        entry = baseline["data"].get(key)
 
-        # Alert if OI% exceeds threshold
-        if oi_pct >= OI_SPIKE_THRESHOLD:
-            alerts.append(f"{opt} {strike}: OI spike {oi_pct:+.1f}% (Prev {prev} → Current {oi})")
+        # ===== FIRST TIME → SET BASELINE =====
+        if entry is None:
+            baseline["data"][key] = {
+                "baseline": oi,
+                "last_alert": oi
+            }
+            if DEBUG_MODE:
+                print(f"Baseline set {key} = {oi}")
+                send_telegram_alert(f"Baseline set {key} = {oi}")
+            continue
 
-        # Update baseline only if current OI is higher than previous baseline
-        prev_oi[key] = max(prev, oi)
+        base_oi = entry["baseline"]
+        last_alert_oi = entry["last_alert"]
 
-    # Mark that first alert has been sent
-    if not first_alert_sent:
+        if base_oi < MIN_BASE_OI:
+            continue
+
+        oi_pct = ((oi - base_oi) / base_oi) * 100
+
+        # ===== ACCELERATION ALERT =====
+        if oi_pct >= OI_SPIKE_THRESHOLD and oi > last_alert_oi:
+            msg = f"{strike} {opt} +{oi_pct:.0f}% (Base {base_oi} → {oi})"
+            if opt == "CE":
+                alerts_ce.append(msg)
+            else:
+                alerts_pe.append(msg)
+
+            baseline["data"][key]["last_alert"] = oi
+
+    # ===== FIRST SCAN ALERT =====
+    if not baseline["first_alert_sent"]:
+        send_telegram_alert(
+            f"*NIFTY OI Monitor Started*\n"
+            f"Spot: {spot}\nATM: {atm}\nBaseline captured."
+        )
         baseline["first_alert_sent"] = True
 
-    baseline["prev_oi"] = prev_oi
+    # ===== GROUPED TELEGRAM ALERT =====
+    if alerts_ce or alerts_pe:
+        msg = f"*🚨 NIFTY OI SPIKE*\nSpot: {spot} | ATM: {atm}\n\n"
+        if alerts_ce:
+            msg += "*📈 CALL BUILDUP*\n" + "\n".join(alerts_ce) + "\n\n"
+        if alerts_pe:
+            msg += "*📉 PUT BUILDUP*\n" + "\n".join(alerts_pe)
+
+        send_telegram_alert(msg)
+
     save_baseline(baseline)
 
-    if alerts:
-        message = f"*NIFTY OI Spike Alert ({now_ist().strftime('%H:%M')})*\n" + "\n".join(alerts)
-        send_telegram_alert(message)
-    elif DEBUG_MODE:
-        print("✅ No significant OI spikes detected.")
+    if  not alerts_ce and not alerts_pe:
+        print("✅ No spikes detected")
+        if DEBUG_MODE:
+            send_telegram_alert("✅ No spikes detected")
 
+# ================= ENTRY =================
 if __name__ == "__main__":
     scan()

@@ -2,7 +2,7 @@ name: NIFTY OI Spike Monitor
 
 on:
   schedule:
-    - cron: "*/5 9-15 * * 1-5"  # Every 5 mins during market hours
+    - cron: "*/1 * * * *"  # Every 5 mins during market hours
   workflow_dispatch:
 
 jobs:
@@ -36,4 +36,4 @@ jobs:
             baseline-oi-
 
       - name: Run NIFTY OI Scan
-        run: python nifty_oi_alert_telegram.py
+        run: python nifty_oi_monitor.py

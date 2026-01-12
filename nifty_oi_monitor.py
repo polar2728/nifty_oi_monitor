@@ -9,7 +9,7 @@ import requests
 OI_SPIKE_THRESHOLD  = 500
 MIN_BASE_OI         = 1000
 STRIKE_RANGE_POINTS = 100
-CHECK_MARKET_HOURS  = True
+CHECK_MARKET_HOURS  = False
 BASELINE_FILE       = "baseline_oi.json"
 
 # ================= TIMEZONE =================

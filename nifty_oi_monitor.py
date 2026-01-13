@@ -6,13 +6,13 @@ from fyers_apiv3 import fyersModel
 import requests
 
 # ================= CONFIG =================
-OI_SPIKE_THRESHOLD  = float(os.environ.get("OI_SPIKE_THRESHOLD", "300"))
-MIN_BASE_OI         = 1000
-STRIKE_RANGE_POINTS = 100
-CHECK_MARKET_HOURS  = True
-BASELINE_FILE       = "baseline_oi.json"
+OI_WATCH_THRESHOLD    = 300    # %
+OI_EXEC_THRESHOLD     = 500    # %
+MIN_BASE_OI           = 1000
+STRIKE_RANGE_POINTS   = 100
+CHECK_MARKET_HOURS    = True
+BASELINE_FILE         = "baseline_oi.json"
 
-# IMPORTANT: GitHub variables are strings
 DEBUG_MODE = str(os.environ.get("DEBUG_MODE", "false")).lower() == "true"
 
 # ================= TIMEZONE =================
@@ -44,37 +44,20 @@ def is_market_open():
 
 def send_telegram_alert(message):
     if not TELEGRAM_TOKEN or not TELEGRAM_CHAT_ID:
-        print("⚠️ Telegram skipped (missing config)")
         return
-
     url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
-    payload = {
-        "chat_id": TELEGRAM_CHAT_ID,
-        "text": message,
-        "parse_mode": "Markdown"
-    }
-
+    payload = {"chat_id": TELEGRAM_CHAT_ID, "text": message, "parse_mode": "Markdown"}
     try:
-        r = requests.post(url, data=payload, timeout=10)
-        if DEBUG_MODE:
-            print("📨 Telegram:", r.status_code, r.text)
+        requests.post(url, data=payload, timeout=10)
     except Exception as e:
-        print("❌ Telegram error:", e)
+        print("Telegram error:", e)
 
 # ================= BASELINE =================
 def load_baseline():
     if os.path.exists(BASELINE_FILE):
         with open(BASELINE_FILE, "r") as f:
             return json.load(f)
-
-    # ALWAYS create baseline structure
-    baseline = {
-        "date": None,
-        "data": {},
-        "first_alert_sent": False
-    }
-    save_baseline(baseline)
-    return baseline
+    return {"date": None, "data": {}, "first_alert_sent": False}
 
 def save_baseline(b):
     with open(BASELINE_FILE, "w") as f:
@@ -90,7 +73,7 @@ def reset_on_new_day(b):
         save_baseline(b)
     return b
 
-# ================= API CALLS =================
+# ================= API =================
 def get_nifty_spot():
     q = fyers.quotes({"symbols": "NSE:NIFTY50-INDEX"})
     return round(q["d"][0]["v"]["lp"])
@@ -110,25 +93,28 @@ def expiry_to_symbol_format(date_str):
 def get_current_weekly_expiry(expiry_info):
     today = now_ist().date()
     expiries = []
-
     for e in expiry_info:
         try:
             exp = datetime.fromtimestamp(int(e["expiry"])).date()
             expiries.append(((exp - today).days, e["date"]))
         except Exception:
             continue
-
     expiries = [x for x in expiries if x[0] >= 0]
     return sorted(expiries, key=lambda x: x[0])[0][1] if expiries else None
 
+# ================= STRIKE SELECTION =================
+def select_trade_strike(atm, buildup_type):
+    if buildup_type == "CE":   # short buildup → buy PE
+        return atm - 50, "PE"
+    else:                      # long buildup → buy CE
+        return atm + 50, "CE"
+
 # ================= SCAN =================
 def scan():
-    print(f"▶ Scan started | DEBUG={DEBUG_MODE}")
+    print("▶ Scan started")
 
     if CHECK_MARKET_HOURS and not is_market_open():
         print("⏱ Market closed")
-        if DEBUG_MODE:
-            send_telegram_alert("⏱ Market closed")
         return
 
     baseline = reset_on_new_day(load_baseline())
@@ -138,70 +124,77 @@ def scan():
 
     raw, expiry_info = fetch_option_chain()
     expiry_date = get_current_weekly_expiry(expiry_info)
-
     if not expiry_date:
-        print("❌ No valid expiry found")
         return
 
     expiry = expiry_to_symbol_format(expiry_date)
 
     df = pd.DataFrame(raw)
     df = df[df["symbol"].str.contains(expiry, regex=False)]
-    df = df[
-        (df["strike_price"] >= atm - STRIKE_RANGE_POINTS) &
-        (df["strike_price"] <= atm + STRIKE_RANGE_POINTS)
-    ]
-
-    alerts_ce, alerts_pe = [], []
+    df = df[(df["strike_price"] >= atm - STRIKE_RANGE_POINTS) &
+            (df["strike_price"] <= atm + STRIKE_RANGE_POINTS)]
 
     for _, r in df.iterrows():
         strike = int(r.strike_price)
-        opt = r.option_type
-        oi = int(r.oi)
-        key = f"{opt}_{strike}"
+        opt    = r.option_type
+        oi     = int(r.oi)
+        ltp    = float(r.ltp)
+        vol    = int(r.volume)
 
+        key = f"{opt}_{strike}"
         entry = baseline["data"].get(key)
 
         if entry is None:
             baseline["data"][key] = {
-                "baseline": oi,
-                "last_alert": oi
+                "baseline_oi": oi,
+                "baseline_ltp": ltp,
+                "baseline_vol": vol,
+                "state": "NONE"
             }
-            if DEBUG_MODE:
-                print(f"🧱 Baseline set {key} = {oi}")
             continue
 
-        base_oi = entry["baseline"]
-        last_alert_oi = entry["last_alert"]
+        base_oi  = entry["baseline_oi"]
+        base_ltp = entry["baseline_ltp"]
+        base_vol = entry["baseline_vol"]
+        state    = entry["state"]
 
         if base_oi < MIN_BASE_OI:
             continue
 
         oi_pct = ((oi - base_oi) / base_oi) * 100
+        ltp_ok = ltp > base_ltp * 1.05
+        vol_ok = vol > base_vol * 1.3
 
-        if oi_pct >= OI_SPIKE_THRESHOLD and oi > last_alert_oi:
-            msg = f"{strike} {opt} +{oi_pct:.0f}% (Base {base_oi} → {oi})"
-            (alerts_ce if opt == "CE" else alerts_pe).append(msg)
-            baseline["data"][key]["last_alert"] = oi
+        # ================= WATCH =================
+        if oi_pct >= OI_WATCH_THRESHOLD and state == "NONE":
+            send_telegram_alert(
+                f"👀 *OI WATCH*\n"
+                f"{strike} {opt}\n"
+                f"OI +{oi_pct:.0f}%\n"
+                f"Spot: {spot}"
+            )
+            entry["state"] = "WATCH"
+
+        # ================= EXECUTION =================
+        if oi_pct >= OI_EXEC_THRESHOLD and state == "WATCH":
+            if ltp_ok and vol_ok:
+                trade_strike, trade_opt = select_trade_strike(atm, opt)
+                send_telegram_alert(
+                    f"🚀 *EXECUTION SIGNAL*\n"
+                    f"{opt} buildup confirmed\n"
+                    f"Buy {trade_strike} {trade_opt}\n\n"
+                    f"OI +{oi_pct:.0f}%\n"
+                    f"LTP ↑ | Volume ↑\n"
+                    f"Spot: {spot}"
+                )
+                entry["state"] = "EXECUTED"
 
     if not baseline["first_alert_sent"]:
         send_telegram_alert(
-            f"*NIFTY OI Monitor Started*\n"
-            f"Spot: {spot}\nATM: {atm}\nBaseline captured."
+            f"*NIFTY OI MONITOR STARTED*\n"
+            f"Spot: {spot}\nATM: {atm}"
         )
         baseline["first_alert_sent"] = True
-
-    if alerts_ce or alerts_pe:
-        msg = f"*🚨 NIFTY OI SPIKE*\nSpot: {spot} | ATM: {atm}\n\n"
-        if alerts_ce:
-            msg += "*📈 CALL BUILDUP*\n" + "\n".join(alerts_ce) + "\n\n"
-        if alerts_pe:
-            msg += "*📉 PUT BUILDUP*\n" + "\n".join(alerts_pe)
-        send_telegram_alert(msg)
-    else:
-        print("✅ No spikes detected")
-        if DEBUG_MODE:
-            send_telegram_alert("✅ No spikes detected")
 
     save_baseline(baseline)
 

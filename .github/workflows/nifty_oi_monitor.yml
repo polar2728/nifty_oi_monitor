@@ -2,8 +2,9 @@ name: NIFTY OI Spike Monitor
 
 on:
   schedule:
+    # Every 10 minutes, UTC 03:00–11:00 → 08:30–16:30 IST, Mon–Fri
     - cron: "*/10 3-11 * * 1-5"
-    - cron: "0 0 * * *"    # keep-alive
+    - cron: "0 0 * * *"   # keep-alive
   workflow_dispatch:
 
 jobs:
@@ -30,20 +31,23 @@ jobs:
       - name: Install dependencies
         run: pip install fyers-apiv3 pandas requests
 
-      - name: Download baseline artifact (if exists)
-        uses: actions/download-artifact@v4
+      # ✅ RESTORE BASELINE (from previous runs)
+      - name: Restore baseline cache
+        uses: actions/cache@v3
         with:
-          name: baseline
-          path: .
-        continue-on-error: true
+          path: baseline_oi.json
+          key: baseline-oi-${{ github.run_id }}
+          restore-keys: |
+            baseline-oi-
 
-      - name: Run OI Scanner
+      - name: Run NIFTY OI Scanner
         run: |
           echo "Event: $GITHUB_EVENT_NAME"
           python nifty_oi_monitor.py
 
-      - name: Upload updated baseline
-        uses: actions/upload-artifact@v4
+      # ✅ SAVE UPDATED BASELINE
+      - name: Save baseline cache
+        uses: actions/cache@v3
         with:
-          name: baseline
           path: baseline_oi.json
+          key: baseline-oi-${{ github.run_id }}

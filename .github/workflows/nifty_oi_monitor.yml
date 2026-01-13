@@ -3,8 +3,8 @@ name: NIFTY OI Spike Monitor
 on:
   schedule:
     # Every 10 minutes, UTC 03:00–11:00 → 08:30–16:30 IST, Mon–Fri
-    - cron: "*/10 3-11 * * 1-5"
-    - cron: "0 0 * * *"   # keep-alive
+    - cron: "*/10 * * * *"
+    - cron: "5,15,25,35,45,55 * * * *"   # keep-alive
   workflow_dispatch:
 
 jobs:

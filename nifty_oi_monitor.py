@@ -89,13 +89,24 @@ def expiry_to_symbol_format(date_str):
     d = datetime.strptime(date_str, "%d-%m-%Y")
     return d.strftime("%y") + str(d.month) + d.strftime("%d")
 
-def get_current_weekly_expiry(expiry_list):
+def get_current_weekly_expiry(expiry_info):
     today = now_ist().date()
     expiries = []
-    for e in expiry_list:
-        exp = datetime.fromtimestamp(int(e["expiry"])).date()
-        expiries.append((exp - today).days, e["date"])
-    return sorted(expiries)[0][1]
+
+    for e in expiry_info:
+        try:
+            exp = datetime.fromtimestamp(int(e["expiry"])).date()
+            expiries.append(((exp - today).days, e["date"]))
+        except Exception:
+            continue
+
+    if not expiries:
+        return None
+
+    # nearest future expiry
+    expiries = [x for x in expiries if x[0] >= 0]
+    return sorted(expiries, key=lambda x: x[0])[0][1] if expiries else None
+
 
 # ================= SCAN =================
 def scan():

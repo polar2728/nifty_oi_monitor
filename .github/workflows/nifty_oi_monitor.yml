@@ -4,6 +4,7 @@ on:
   schedule:
     # Every 5 mins UTC 3:45-10:00 = 09:15-15:30 IST, Mon-Fri
     - cron: "*/5 3-10 * * 1-5"
+    - cron: "0 0 * * *"          # keep-alive (00:00 UTC)
   workflow_dispatch:
 
 jobs:

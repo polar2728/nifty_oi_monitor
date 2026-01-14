@@ -3,6 +3,10 @@ name: NIFTY OI Spike Monitor
 on:
   workflow_dispatch:
 
+concurrency:
+  group: nifty-oi-monitor
+  cancel-in-progress: true
+
 jobs:
   scan:
     runs-on: ubuntu-latest
@@ -16,46 +20,30 @@ jobs:
       TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
 
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-      - name: Setup Python
-        uses: actions/setup-python@v5
+      - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
 
       - name: Install dependencies
         run: pip install fyers-apiv3 pandas requests
 
-      # ✅ RESTORE BASELINE (from previous runs)
+      # ✅ RESTORE BASELINE (PERSISTENT)
       - name: Restore baseline cache
         uses: actions/cache@v3
         with:
           path: baseline_oi.json
-          key: baseline-oi-${{ github.run_id }}
+          key: baseline-oi-v1
           restore-keys: |
             baseline-oi-
 
       - name: Run NIFTY OI Scanner
-        run: |
-          echo "Event: $GITHUB_EVENT_NAME"
-          python nifty_oi_monitor.py
+        run: python nifty_oi_monitor.py
 
       # ✅ SAVE UPDATED BASELINE
-      - name: Cache baseline file
+      - name: Save baseline cache
         uses: actions/cache@v3
         with:
           path: baseline_oi.json
           key: baseline-oi-v1
-
-      - name: Inspect baseline cache
-        run: |
-         echo "📂 Workspace files:"
-         ls -lh
-         if [ -f baseline_oi.json ]; then
-            echo "✅ baseline_oi.json exists"
-            echo "📄 Contents:"
-            cat baseline_oi.json
-         else
-            echo "❌ baseline_oi.json NOT found"
-         fi

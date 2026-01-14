@@ -54,24 +54,38 @@ def send_telegram_alert(message):
 
 # ================= BASELINE =================
 def load_baseline():
+    """
+    Load the baseline from file.
+    If not exists, return default structure.
+    """
     if os.path.exists(BASELINE_FILE):
-        with open(BASELINE_FILE, "r") as f:
-            return json.load(f)
+        try:
+            with open(BASELINE_FILE, "r") as f:
+                return json.load(f)
+        except json.JSONDecodeError:
+            print("⚠ Baseline file corrupted → resetting")
+            return {"date": None, "data": {}, "first_alert_sent": False}
     return {"date": None, "data": {}, "first_alert_sent": False}
+
+
 
 def save_baseline(b):
     with open(BASELINE_FILE, "w") as f:
         json.dump(b, f, indent=2)
 
 def reset_on_new_day(b):
+    """
+    Reset baseline on a new trading day.
+    """
     today = now_ist().date().isoformat()
     if b.get("date") != today:
         print("🔄 New trading day → baseline reset")
         b["date"] = today
-        b["data"] = {}
+        b["data"] = {}                # clear previous day's strikes
         b["first_alert_sent"] = False
-        save_baseline(b)
+        save_baseline(b)              # save immediately after reset
     return b
+
 
 # ================= API =================
 def get_nifty_spot():

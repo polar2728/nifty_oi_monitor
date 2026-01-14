@@ -47,3 +47,13 @@ jobs:
         with:
           path: baseline_oi.json
           key: baseline-oi-v1
+      - name: Debug baseline cache
+        run: |
+         echo "📂 Files:"
+         ls -lh
+         if [ -f baseline_oi.json ]; then
+           echo "✅ baseline_oi.json found"
+           cat baseline_oi.json
+         else
+           echo "❌ baseline_oi.json NOT found"
+         fi

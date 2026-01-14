@@ -10,7 +10,7 @@ OI_WATCH_THRESHOLD    = 300    # %
 OI_EXEC_THRESHOLD     = 500    # %
 MIN_BASE_OI           = 1000
 STRIKE_RANGE_POINTS   = 100
-CHECK_MARKET_HOURS    = False
+CHECK_MARKET_HOURS    = True
 BASELINE_FILE         = "baseline_oi.json"
 
 DEBUG_MODE = str(os.environ.get("DEBUG_MODE", "false")).lower() == "true"

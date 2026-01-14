@@ -214,7 +214,8 @@ def scan():
         )
         baseline["first_alert_sent"] = True
 
-    save_baseline(baseline)
+    if not FORCE_TEST_SPIKE:
+        save_baseline(baseline)
 
 # ================= ENTRY =================
 if __name__ == "__main__":

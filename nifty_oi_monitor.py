@@ -12,7 +12,6 @@ MIN_BASE_OI           = 1000
 STRIKE_RANGE_POINTS   = 100
 CHECK_MARKET_HOURS    = True
 BASELINE_FILE         = "baseline_oi.json"
-FORCE_TEST_SPIKE      = True
 
 DEBUG_MODE = str(os.environ.get("DEBUG_MODE", "false")).lower() == "true"
 
@@ -159,9 +158,6 @@ def scan():
         key = f"{opt}_{strike}"
         entry = baseline["data"].get(key)
 
-        if FORCE_TEST_SPIKE:
-            oi = int(entry["baseline_oi"] * 6)  # +500%
-
         if entry is None:
             baseline["data"][key] = {
                 "baseline_oi": oi,
@@ -214,8 +210,7 @@ def scan():
         )
         baseline["first_alert_sent"] = True
 
-    if not FORCE_TEST_SPIKE:
-        save_baseline(baseline)
+    save_baseline(baseline)
 
 # ================= ENTRY =================
 if __name__ == "__main__":

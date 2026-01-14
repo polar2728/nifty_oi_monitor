@@ -29,12 +29,12 @@ jobs:
       - name: Install dependencies
         run: pip install fyers-apiv3 pandas requests
 
-      # ✅ RESTORE BASELINE (PERSISTENT)
-      - name: Restore baseline cache
+      # ✅ RESTORE LATEST BASELINE
+      - name: Restore baseline
         uses: actions/cache@v3
         with:
           path: baseline_oi.json
-          key: baseline-oi-v1
+          key: baseline-oi-${{ github.run_id }}
           restore-keys: |
             baseline-oi-
 
@@ -42,18 +42,19 @@ jobs:
         run: python nifty_oi_monitor.py
 
       # ✅ SAVE UPDATED BASELINE
-      - name: Save baseline cache
+      - name: Save baseline
         uses: actions/cache@v3
         with:
           path: baseline_oi.json
-          key: baseline-oi-v1
-      - name: Debug baseline cache
+          key: baseline-oi-${{ github.run_id }}
+
+      - name: Debug baseline
         run: |
-         echo "📂 Files:"
-         ls -lh
-         if [ -f baseline_oi.json ]; then
-           echo "✅ baseline_oi.json found"
-           cat baseline_oi.json
-         else
-           echo "❌ baseline_oi.json NOT found"
-         fi
+          echo "📂 Files:"
+          ls -lh
+          if [ -f baseline_oi.json ]; then
+            echo "✅ baseline_oi.json"
+            cat baseline_oi.json
+          else
+            echo "❌ baseline_oi.json NOT found"
+          fi

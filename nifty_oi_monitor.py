@@ -191,15 +191,15 @@ def scan():
             entry["state"] = "WATCH"
 
         # ================= EXECUTION =================
-        if oi_pct >= OI_EXEC_THRESHOLD and state == "WATCH":
+        if oi_pct >= OI_EXEC_THRESHOLD:
             trade_strike, trade_opt = select_trade_strike(atm, opt)
             send_telegram_alert(
                 f"🚀 *EXECUTION SIGNAL*\n"
                 f"{opt} buildup confirmed\n"
                 f"Buy {trade_strike} {trade_opt}\n\n"
                 f"OI +{oi_pct:.0f}%\n"
-                f"LTP Change{ltp_change_pct:.0f}%\n"
-                f"Volume ↑ >30% {vol_ok}\n"
+                f"Sport Move: {ltp_change_pct:.0f}%\n"
+                f"Volume ↑ >30%: {vol_ok}\n"
                 f"Spot: {spot}"
             )
             entry["state"] = "EXECUTED"

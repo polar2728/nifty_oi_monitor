@@ -176,7 +176,8 @@ def scan():
             continue
 
         oi_pct = ((oi - base_oi) / base_oi) * 100
-        ltp_ok = ltp > base_ltp * 1.05
+        # ltp_ok = ltp > base_ltp * 1.05
+        ltp_change_pct = ((ltp - base_ltp) / base_ltp * 100) if base_ltp > 0 else 0
         vol_ok = vol > base_vol * 1.3
 
         # ================= WATCH =================
@@ -191,17 +192,17 @@ def scan():
 
         # ================= EXECUTION =================
         if oi_pct >= OI_EXEC_THRESHOLD and state == "WATCH":
-            if ltp_ok and vol_ok:
-                trade_strike, trade_opt = select_trade_strike(atm, opt)
-                send_telegram_alert(
-                    f"🚀 *EXECUTION SIGNAL*\n"
-                    f"{opt} buildup confirmed\n"
-                    f"Buy {trade_strike} {trade_opt}\n\n"
-                    f"OI +{oi_pct:.0f}%\n"
-                    f"LTP ↑ | Volume ↑\n"
-                    f"Spot: {spot}"
-                )
-                entry["state"] = "EXECUTED"
+            trade_strike, trade_opt = select_trade_strike(atm, opt)
+            send_telegram_alert(
+                f"🚀 *EXECUTION SIGNAL*\n"
+                f"{opt} buildup confirmed\n"
+                f"Buy {trade_strike} {trade_opt}\n\n"
+                f"OI +{oi_pct:.0f}%\n"
+                f"LTP Change{ltp_change_pct:.0f}%\n"
+                f"Volume ↑ >30% {vol_ok}\n"
+                f"Spot: {spot}"
+            )
+            entry["state"] = "EXECUTED"
 
     if not baseline["first_alert_sent"]:
         send_telegram_alert(

@@ -144,9 +144,25 @@ def scan():
     expiry = expiry_to_symbol_format(expiry_date)
 
     df = pd.DataFrame(raw)
+
+    # First filter: expiry code in symbol
     df = df[df["symbol"].str.contains(expiry, regex=False)]
-    df = df[(df["strike_price"] >= atm - STRIKE_RANGE_POINTS) &
-            (df["strike_price"] <= atm + STRIKE_RANGE_POINTS)]
+    
+    # Second filter: strike range around ATM + valid strikes
+    df = df[
+        (df["strike_price"].between(atm - STRIKE_RANGE_POINTS, atm + STRIKE_RANGE_POINTS)) &
+        (df["strike_price"] % 100 == 0)
+    ]
+
+    # Now safe to print debug info
+    print(f"Selected expiry date: {expiry_date}")
+    print(f"Expiry filter string: {expiry}")
+    print(f"Total raw options: {len(raw)}")
+    print(f"After expiry filter: {len(df[df['symbol'].str.contains(expiry)])}")  # redundant now, but ok
+    print(f"After strike range filter: {len(df)}")
+    print(f"Number of valid CE/PE rows: {len(df[df['option_type'].isin(['CE', 'PE'])])}")
+    
+    updated = False
 
     for _, r in df.iterrows():
         strike = int(r.strike_price)
@@ -189,6 +205,7 @@ def scan():
                 f"Spot: {spot}"
             )
             entry["state"] = "WATCH"
+            updated = True
 
         # ================= EXECUTION =================
         if oi_pct >= OI_EXEC_THRESHOLD:
@@ -198,11 +215,12 @@ def scan():
                 f"{opt} buildup confirmed\n"
                 f"Buy {trade_strike} {trade_opt}\n\n"
                 f"OI +{oi_pct:.0f}%\n"
-                f"Sport Move: {ltp_change_pct:.0f}%\n"
+                f"LTP Move: {ltp_change_pct:.0f}%\n"    
                 f"Volume ↑ >30%: {vol_ok}\n"
                 f"Spot: {spot}"
             )
             entry["state"] = "EXECUTED"
+            updated = True
 
     if not baseline["first_alert_sent"]:
         send_telegram_alert(
@@ -210,8 +228,17 @@ def scan():
             f"Spot: {spot}\nATM: {atm}"
         )
         baseline["first_alert_sent"] = True
+        updated = True
 
-    save_baseline(baseline)
+    # NEW: Save if we added any entries (even without alerts)
+    if baseline["data"] or updated:  # or len(baseline["data"]) > 0
+        if not baseline["data"]:
+            print("WARNING: Processed rows but no baseline entries added (all OI < MIN_BASE_OI?)")
+        save_baseline(baseline)
+        print("Baseline saved — entries count:", len(baseline["data"]))
+    else:
+        print("No changes/alerts — baseline not saved this run")
+    
 
 # ================= ENTRY =================
 if __name__ == "__main__":

@@ -222,6 +222,7 @@ def scan():
         msg = f"🚀 *EXECUTION SIGNAL - CE BUILDUP*\n" \
               f"Buy {trade_strike} {trade_opt}\n" \
               f"Qualifying CE strikes: {', '.join(map(str, ce_buildups))}\n" \
+              f"OI + {oi_pct:.0f}%   Vol ↑\n" \    
               f"LTP Change: {ltp_change_pct:.0f}%\n" \
               f"Volume ↑ >30%: {vol_ok}\n" \
               f"Spot: {spot}"
@@ -232,6 +233,7 @@ def scan():
         msg = f"🚀 *EXECUTION SIGNAL - PE BUILDUP*\n" \
               f"Buy {trade_strike} {trade_opt}\n" \
               f"Qualifying PE strikes: {', '.join(map(str, pe_buildups))}\n" \
+              f"OI + {oi_pct:.0f}%   Vol ↑\n" \    
               f"LTP Change: {ltp_change_pct:.0f}%\n" \
               f"Volume ↑ >30%: {vol_ok}\n" \
               f"Spot: {spot}"

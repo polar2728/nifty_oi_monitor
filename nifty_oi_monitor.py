@@ -204,7 +204,7 @@ def scan():
             updated = True
 
         # ================= EXECUTION =================
-        if oi_pct >= OI_EXEC_THRESHOLD and state == "WATCH":
+        if oi_pct >= OI_EXEC_THRESHOLD:
             print(f"Threshold breached for strike : {strike}")
 
             # Collect instead of immediate send
@@ -222,7 +222,7 @@ def scan():
         msg = f"🚀 *EXECUTION SIGNAL - CE BUILDUP*\n" \
               f"Buy {trade_strike} {trade_opt}\n" \
               f"Qualifying CE strikes: {', '.join(map(str, ce_buildups))}\n" \
-              f"OI + {oi_pct:.0f}%   Vol ↑\n" \    
+              f"OI + {oi_pct:.0f}%   Vol ↑\n" \
               f"LTP Change: {ltp_change_pct:.0f}%\n" \
               f"Volume ↑ >30%: {vol_ok}\n" \
               f"Spot: {spot}"

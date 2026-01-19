@@ -206,37 +206,57 @@ def scan():
         # ================= EXECUTION =================
         if oi_pct >= OI_EXEC_THRESHOLD:
             print(f"Threshold breached for strike : {strike}")
-
+            buildup_info = {
+                "strike": strike,
+                "oi_pct": oi_pct,
+                "ltp_change_pct": ltp_change_pct,
+                "vol_ok": vol_ok
+            }
             # Collect instead of immediate send
             if opt == "CE":
-                ce_buildups.append(strike)
+                ce_buildups.append(buildup_info)
             else:
-                pe_buildups.append(strike)
+                pe_buildups.append(buildup_info)
 
             entry["state"] = "EXECUTED"
             updated = True
 
     # Grouped alerts after loop (one per side)
     if ce_buildups:
-        trade_strike, trade_opt = select_trade_strike(ce_buildups[0], "CE")  # use first qualifying strike
-        msg = f"🚀 *EXECUTION SIGNAL - CE BUILDUP*\n" \
-              f"Buy {trade_strike} {trade_opt}\n" \
-              f"Qualifying CE strikes: {', '.join(map(str, ce_buildups))}\n" \
-              f"OI + {oi_pct:.0f}%   Vol ↑\n" \
-              f"LTP Change: {ltp_change_pct:.0f}%\n" \
-              f"Volume ↑ >30%: {vol_ok}\n" \
-              f"Spot: {spot}"
+        # Pick first qualifying strike for the trade recommendation
+        first = ce_buildups[0]
+        trade_strike = first["strike"]
+        trade_opt = "PE"  # same-strike contrarian
+
+        details = "\n".join(
+            f"{b['strike']} CE: +{b['oi_pct']:.0f}%"
+            for b in ce_buildups
+        )
+
+        msg = (
+            f"🚀 *EXECUTION SIGNAL - CE BUILDUP*\n"
+            f"Buy {trade_strike} {trade_opt}\n\n"
+            f"Qualifying CE strikes:\n{details}\n\n"
+            f"Spot: {spot}"
+        )
         send_telegram_alert(msg)
 
     if pe_buildups:
-        trade_strike, trade_opt = select_trade_strike(pe_buildups[0], "PE")
-        msg = f"🚀 *EXECUTION SIGNAL - PE BUILDUP*\n" \
-              f"Buy {trade_strike} {trade_opt}\n" \
-              f"Qualifying PE strikes: {', '.join(map(str, pe_buildups))}\n" \
-              f"OI + {oi_pct:.0f}%   Vol ↑\n" \
-              f"LTP Change: {ltp_change_pct:.0f}%\n" \
-              f"Volume ↑ >30%: {vol_ok}\n" \
-              f"Spot: {spot}"
+        first = pe_buildups[0]
+        trade_strike = first["strike"]
+        trade_opt = "CE"
+
+        details = "\n".join(
+            f"{b['strike']} PE: +{b['oi_pct']:.0f}%"
+            for b in pe_buildups
+        )
+
+        msg = (
+            f"🚀 *EXECUTION SIGNAL - PE BUILDUP*\n"
+            f"Buy {trade_strike} {trade_opt}\n\n"
+            f"Qualifying PE strikes:\n{details}\n\n"
+            f"Spot: {spot}"
+        )
         send_telegram_alert(msg)
 
     if not baseline["first_alert_sent"]:

@@ -146,6 +146,16 @@ def scan():
     df = df[(df["strike_price"] >= atm - STRIKE_RANGE_POINTS) &
             (df["strike_price"] <= atm + STRIKE_RANGE_POINTS)]
 
+    # Now safe to print debug info
+    print(f"Selected expiry date: {expiry_date}")
+    print(f"Expiry filter string: {expiry}")
+    print(f"Total raw options: {len(raw)}")
+    print(f"After expiry filter: {len(df[df['symbol'].str.contains(expiry)])}")  # redundant now, but ok
+    print(f"After strike range filter: {len(df)}")
+    print(f"Number of valid CE/PE rows: {len(df[df['option_type'].isin(['CE', 'PE'])])}")
+
+    updated = False
+
     # Collect qualifying strikes per side (to group alerts)
     ce_buildups = []
     pe_buildups = []
@@ -158,9 +168,6 @@ def scan():
         vol = int(r.volume)
 
         key = f"{opt}_{strike}"
-        
-        print(f"Option Strike Key: {key}")
-
         entry = baseline["data"].get(key)
 
         if entry is None:
@@ -198,9 +205,7 @@ def scan():
 
         # ================= EXECUTION =================
         if oi_pct >= OI_EXEC_THRESHOLD and state == "WATCH":
-            print(f"Threshold breached for strike : {key}")
-            trade_strike, trade_opt = select_trade_strike(strike, opt)  # ← same-strike contrarian
-            print(f"Sending alert for strike : {trade_strike} and opt: {trade_opt}")
+            print(f"Threshold breached for strike : {strike}")
 
             # Collect instead of immediate send
             if opt == "CE":

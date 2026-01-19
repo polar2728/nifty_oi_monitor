@@ -172,6 +172,9 @@ def scan():
         vol    = int(r.volume)
 
         key = f"{opt}_{strike}"
+        
+        print(f"Option Strike Key: {key}")
+
         entry = baseline["data"].get(key)
 
         if entry is None:

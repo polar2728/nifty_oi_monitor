@@ -67,8 +67,6 @@ def load_baseline():
             return {"date": None, "data": {}, "first_alert_sent": False}
     return {"date": None, "data": {}, "first_alert_sent": False}
 
-
-
 def save_baseline(b):
     with open(BASELINE_FILE, "w") as f:
         json.dump(b, f, indent=2)
@@ -85,7 +83,6 @@ def reset_on_new_day(b):
         b["first_alert_sent"] = False
         save_baseline(b)              # save immediately after reset
     return b
-
 
 # ================= API =================
 def get_nifty_spot():
@@ -117,11 +114,12 @@ def get_current_weekly_expiry(expiry_info):
     return sorted(expiries, key=lambda x: x[0])[0][1] if expiries else None
 
 # ================= STRIKE SELECTION =================
-def select_trade_strike(atm, buildup_type):
-    if buildup_type == "CE":   # short buildup → buy PE
-        return atm - 50, "PE"
-    else:                      # long buildup → buy CE
-        return atm + 50, "CE"
+def select_trade_strike(strike, buildup_type):
+    # Same-strike contrarian: buy opposite option at the same strike
+    if buildup_type == "CE":   # short buildup on CE → buy PE at same strike
+        return strike, "PE"
+    else:                      # short buildup on PE → buy CE at same strike
+        return strike, "CE"
 
 # ================= SCAN =================
 def scan():
@@ -144,32 +142,20 @@ def scan():
     expiry = expiry_to_symbol_format(expiry_date)
 
     df = pd.DataFrame(raw)
-
-    # First filter: expiry code in symbol
     df = df[df["symbol"].str.contains(expiry, regex=False)]
-    
-    # Second filter: strike range around ATM + valid strikes
-    df = df[
-        (df["strike_price"].between(atm - STRIKE_RANGE_POINTS, atm + STRIKE_RANGE_POINTS)) &
-        (df["strike_price"] % 100 == 0)
-    ]
+    df = df[(df["strike_price"] >= atm - STRIKE_RANGE_POINTS) &
+            (df["strike_price"] <= atm + STRIKE_RANGE_POINTS)]
 
-    # Now safe to print debug info
-    print(f"Selected expiry date: {expiry_date}")
-    print(f"Expiry filter string: {expiry}")
-    print(f"Total raw options: {len(raw)}")
-    print(f"After expiry filter: {len(df[df['symbol'].str.contains(expiry)])}")  # redundant now, but ok
-    print(f"After strike range filter: {len(df)}")
-    print(f"Number of valid CE/PE rows: {len(df[df['option_type'].isin(['CE', 'PE'])])}")
-    
-    updated = False
+    # Collect qualifying strikes per side (to group alerts)
+    ce_buildups = []
+    pe_buildups = []
 
     for _, r in df.iterrows():
         strike = int(r.strike_price)
-        opt    = r.option_type
-        oi     = int(r.oi)
-        ltp    = float(r.ltp)
-        vol    = int(r.volume)
+        opt = r.option_type
+        oi = int(r.oi)
+        ltp = float(r.ltp)
+        vol = int(r.volume)
 
         key = f"{opt}_{strike}"
         
@@ -196,7 +182,6 @@ def scan():
             continue
 
         oi_pct = ((oi - base_oi) / base_oi) * 100
-        # ltp_ok = ltp > base_ltp * 1.05
         ltp_change_pct = ((ltp - base_ltp) / base_ltp * 100) if base_ltp > 0 else 0
         vol_ok = vol > base_vol * 1.3
 
@@ -212,21 +197,40 @@ def scan():
             updated = True
 
         # ================= EXECUTION =================
-        if oi_pct >= OI_EXEC_THRESHOLD:
+        if oi_pct >= OI_EXEC_THRESHOLD and state == "WATCH":
             print(f"Threshold breached for strike : {key}")
-            trade_strike, trade_opt = select_trade_strike(atm, opt)
+            trade_strike, trade_opt = select_trade_strike(strike, opt)  # ← same-strike contrarian
             print(f"Sending alert for strike : {trade_strike} and opt: {trade_opt}")
-            send_telegram_alert(
-                f"🚀 *EXECUTION SIGNAL*\n"
-                f"{opt} buildup confirmed\n"
-                f"Buy {trade_strike} {trade_opt}\n\n"
-                f"OI +{oi_pct:.0f}%\n"
-                f"LTP Move: {ltp_change_pct:.0f}%\n"    
-                f"Volume ↑ >30%: {vol_ok}\n"
-                f"Spot: {spot}"
-            )
+
+            # Collect instead of immediate send
+            if opt == "CE":
+                ce_buildups.append(strike)
+            else:
+                pe_buildups.append(strike)
+
             entry["state"] = "EXECUTED"
             updated = True
+
+    # Grouped alerts after loop (one per side)
+    if ce_buildups:
+        trade_strike, trade_opt = select_trade_strike(ce_buildups[0], "CE")  # use first qualifying strike
+        msg = f"🚀 *EXECUTION SIGNAL - CE BUILDUP*\n" \
+              f"Buy {trade_strike} {trade_opt}\n" \
+              f"Qualifying CE strikes: {', '.join(map(str, ce_buildups))}\n" \
+              f"LTP Change: {ltp_change_pct:.0f}%\n" \
+              f"Volume ↑ >30%: {vol_ok}\n" \
+              f"Spot: {spot}"
+        send_telegram_alert(msg)
+
+    if pe_buildups:
+        trade_strike, trade_opt = select_trade_strike(pe_buildups[0], "PE")
+        msg = f"🚀 *EXECUTION SIGNAL - PE BUILDUP*\n" \
+              f"Buy {trade_strike} {trade_opt}\n" \
+              f"Qualifying PE strikes: {', '.join(map(str, pe_buildups))}\n" \
+              f"LTP Change: {ltp_change_pct:.0f}%\n" \
+              f"Volume ↑ >30%: {vol_ok}\n" \
+              f"Spot: {spot}"
+        send_telegram_alert(msg)
 
     if not baseline["first_alert_sent"]:
         send_telegram_alert(
@@ -236,15 +240,14 @@ def scan():
         baseline["first_alert_sent"] = True
         updated = True
 
-    # NEW: Save if we added any entries (even without alerts)
-    if baseline["data"] or updated:  # or len(baseline["data"]) > 0
+    # Save if any changes
+    if baseline["data"] or updated:
         if not baseline["data"]:
             print("WARNING: Processed rows but no baseline entries added (all OI < MIN_BASE_OI?)")
         save_baseline(baseline)
         print("Baseline saved — entries count:", len(baseline["data"]))
     else:
         print("No changes/alerts — baseline not saved this run")
-    
 
 # ================= ENTRY =================
 if __name__ == "__main__":

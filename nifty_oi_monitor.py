@@ -178,6 +178,7 @@ def scan():
         entry = baseline["data"].get(key)
 
         if entry is None:
+            print(f"Entry not found, creating new entry in baseline Strike Key: {key}")
             baseline["data"][key] = {
                 "baseline_oi": oi,
                 "baseline_ltp": ltp,
@@ -212,7 +213,9 @@ def scan():
 
         # ================= EXECUTION =================
         if oi_pct >= OI_EXEC_THRESHOLD:
+            print(f"Threshold breached for strike : {key}")
             trade_strike, trade_opt = select_trade_strike(atm, opt)
+            print(f"Sending alert for strike : {trade_strike} and opt: {trade_opt}")
             send_telegram_alert(
                 f"🚀 *EXECUTION SIGNAL*\n"
                 f"{opt} buildup confirmed\n"

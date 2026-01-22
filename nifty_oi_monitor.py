@@ -110,13 +110,19 @@ def get_current_weekly_expiry(expiry_info):
             expiries.append(((exp - today).days, e["date"]))
         except Exception:
             continue
+    
     expiries = [x for x in expiries if x[0] >= 0]
     
+    # Optional debug (safe version)
     print("All future expiries:")
-    for days, date_str, exp_date in sorted(tuesdays + all_future, key=lambda x: x[0]):
-        print(f"  - {date_str} ({days} days away, weekday {exp_date.weekday()})")
+    for days, date_str in sorted(expiries):
+        print(f"  - {date_str} ({days} days away)")
     
-    return sorted(expiries, key=lambda x: x[0])[0][1] if expiries else None
+    if not expiries:
+        print("No future expiry found")
+        return None
+    
+    return sorted(expiries, key=lambda x: x[0])[0][1]
 
 # ================= STRIKE SELECTION =================
 def select_trade_strike(strike, buildup_type):

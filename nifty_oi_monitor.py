@@ -98,8 +98,23 @@ def fetch_option_chain():
     return r["data"]["optionsChain"], r["data"]["expiryData"]
 
 def expiry_to_symbol_format(date_str):
-    d = datetime.strptime(date_str, "%d-%m-%Y")
-    return d.strftime("%y") + str(d.month) + d.strftime("%d")
+    try:
+        d = datetime.strptime(date_str, "%d-%m-%Y")
+        yy = d.strftime("%y")           # '26'
+        m_num = str(d.month)            # '1'
+        dd = d.strftime("%d")           # '27'
+        m_short = d.strftime("%b").upper()  # 'JAN'
+
+        # Weekly format: YYMDD (no zero on month)
+        weekly = yy + m_num + dd        # '26127'
+
+        # Monthly format: YYMMM (3-letter month)
+        monthly = yy + m_short          # '26JAN'
+
+        return weekly, monthly          # return both
+    except Exception as e:
+        print(f"Date conversion error: {e}")
+        return None, None
 
 def get_current_weekly_expiry(expiry_info):
     today = now_ist().date()
@@ -150,13 +165,33 @@ def scan():
     if not expiry_date:
         return
 
-    expiry = expiry_to_symbol_format(expiry_date)
+    weekly, monthly = expiry_to_symbol_format(expiry_date)
+    if weekly is None:
+        return
+
+    print(f"Trying weekly filter: '{weekly}'")
+    print(f"Trying monthly filter: '{monthly}'")
 
     df = pd.DataFrame(raw)
-    df = df[df["symbol"].str.contains(expiry, regex=False)]
-    if len(df) == 0:
-        print("Expiry filter removed all — showing sample symbols")
-        print("First 5 symbols:", raw[:5])
+
+    # Try weekly first
+    df_filtered = df[df["symbol"].str.contains(weekly, regex=False, na=False)]
+    print(f"After weekly expiry filter: {len(df_filtered)}")
+    if len(df_filtered) > 0:
+        print("First 3 matching symbols after filter:", df_filtered["symbol"].head(3).tolist())
+    else:
+        print("No match in either format — showing first 5 raw symbols:")
+        print([row['symbol'] for row in raw[:5]])
+
+    if len(df_filtered) == 0:
+        # Fallback to monthly format
+        print("Weekly filter failed — trying monthly format")
+        df_filtered = df[df["symbol"].str.contains(monthly, regex=False, na=False)]
+        print(f"After monthly expiry filter: {len(df_filtered)}")
+
+    df = df_filtered
+
+    # Proceed with strike range
     df = df[(df["strike_price"] >= atm - STRIKE_RANGE_POINTS) &
             (df["strike_price"] <= atm + STRIKE_RANGE_POINTS)]
 

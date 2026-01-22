@@ -153,7 +153,10 @@ def scan():
     expiry = expiry_to_symbol_format(expiry_date)
 
     df = pd.DataFrame(raw)
-    # df = df[df["symbol"].str.contains(expiry, regex=False)]
+    df = df[df["symbol"].str.contains(expiry, regex=False)]
+    if len(df) == 0:
+        print("Expiry filter removed all — showing sample symbols")
+        print("First 5 symbols:", raw[:5])
     df = df[(df["strike_price"] >= atm - STRIKE_RANGE_POINTS) &
             (df["strike_price"] <= atm + STRIKE_RANGE_POINTS)]
 

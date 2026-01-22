@@ -197,7 +197,6 @@ def scan():
 
     # Now safe to print debug info
     print(f"Selected expiry date: {expiry_date}")
-    print(f"Expiry filter string: {expiry}")
     print(f"Total raw options: {len(raw)}")
     print(f"After expiry filter: {len(df[df['symbol'].str.contains(expiry)])}")  # redundant now, but ok
     print(f"After strike range filter: {len(df)}")

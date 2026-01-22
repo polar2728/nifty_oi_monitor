@@ -111,6 +111,11 @@ def get_current_weekly_expiry(expiry_info):
         except Exception:
             continue
     expiries = [x for x in expiries if x[0] >= 0]
+    
+    print("All future expiries:")
+    for days, date_str, exp_date in sorted(tuesdays + all_future, key=lambda x: x[0]):
+        print(f"  - {date_str} ({days} days away, weekday {exp_date.weekday()})")
+    
     return sorted(expiries, key=lambda x: x[0])[0][1] if expiries else None
 
 # ================= STRIKE SELECTION =================

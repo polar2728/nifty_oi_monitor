@@ -198,7 +198,6 @@ def scan():
     # Now safe to print debug info
     print(f"Selected expiry date: {expiry_date}")
     print(f"Total raw options: {len(raw)}")
-    print(f"After expiry filter: {len(df[df['symbol'].str.contains(expiry)])}")  # redundant now, but ok
     print(f"After strike range filter: {len(df)}")
     print(f"Number of valid CE/PE rows: {len(df[df['option_type'].isin(['CE', 'PE'])])}")
 

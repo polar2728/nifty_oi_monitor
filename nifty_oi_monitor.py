@@ -115,7 +115,7 @@ def get_current_weekly_expiry(expiry_info):
     expiries = []
     for e in expiry_info:
         try:
-            exp = datetime.fromtimestamp(int(e["expiry"])).date()
+            exp = datetime.fromtimestamp(int(e["expiry"]), tz=IST).date()
             expiries.append(((exp - today).days, e["date"]))
         except Exception:
             continue
@@ -125,12 +125,6 @@ def get_current_weekly_expiry(expiry_info):
         return None
     return sorted(expiries, key=lambda x: x[0])[0][1]
 
-# ================= STRIKE SELECTION =================
-def select_trade_strike(strike, buildup_type):
-    if buildup_type == "CE":
-        return strike, "PE"
-    else:
-        return strike, "CE"
 
 # ================= SCAN =================
 def scan():
@@ -173,6 +167,7 @@ def scan():
     df = df[(df["strike_price"] >= atm - STRIKE_RANGE_POINTS) &
             (df["strike_price"] <= atm + STRIKE_RANGE_POINTS)]
 
+    print(f"[{now_ist().strftime('%H:%M:%S')}] Spot: {spot} | ATM: {atm} | Range: {atm - STRIKE_RANGE_POINTS} – {atm + STRIKE_RANGE_POINTS}")
     # === NEW: Pre-compute OI % changes for opposite-side & conflict checks ===
     strike_oi_changes = {}   # strike -> {"CE": pct, "PE": pct}
 

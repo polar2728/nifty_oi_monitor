@@ -13,6 +13,11 @@ STRIKE_RANGE_POINTS   = 100
 CHECK_MARKET_HOURS    = True
 BASELINE_FILE         = "baseline_oi.json"
 
+# Additional thresholds for better alignment with the video strategy
+OI_COVERING_THRESHOLD   = -25      # % OI decrease on opposite side (covering)
+OI_BOTH_SIDES_AVOID     = 250      # % if both CE & PE >= this → skip (range-bound)
+PREMIUM_DROP_TOLERANCE  = 5        # max premium % change allowed during buildup (confirms short)
+
 DEBUG_MODE = str(os.environ.get("DEBUG_MODE", "false")).lower() == "true"
 
 # ================= TIMEZONE =================
@@ -54,10 +59,6 @@ def send_telegram_alert(message):
 
 # ================= BASELINE =================
 def load_baseline():
-    """
-    Load the baseline from file.
-    If not exists, return default structure.
-    """
     if os.path.exists(BASELINE_FILE):
         try:
             with open(BASELINE_FILE, "r") as f:
@@ -72,16 +73,13 @@ def save_baseline(b):
         json.dump(b, f, indent=2)
 
 def reset_on_new_day(b):
-    """
-    Reset baseline on a new trading day.
-    """
     today = now_ist().date().isoformat()
     if b.get("date") != today:
         print("🔄 New trading day → baseline reset")
         b["date"] = today
-        b["data"] = {}                # clear previous day's strikes
+        b["data"] = {}
         b["first_alert_sent"] = False
-        save_baseline(b)              # save immediately after reset
+        save_baseline(b)
     return b
 
 # ================= API =================
@@ -100,18 +98,14 @@ def fetch_option_chain():
 def expiry_to_symbol_format(date_str):
     try:
         d = datetime.strptime(date_str, "%d-%m-%Y")
-        yy = d.strftime("%y")           # '26'
-        m_num = str(d.month)            # '1'
-        dd = d.strftime("%d")           # '27'
-        m_short = d.strftime("%b").upper()  # 'JAN'
+        yy = d.strftime("%y")
+        m_num = str(d.month)
+        dd = d.strftime("%d")
+        m_short = d.strftime("%b").upper()
 
-        # Weekly format: YYMDD (no zero on month)
-        weekly = yy + m_num + dd        # '26127'
-
-        # Monthly format: YYMMM (3-letter month)
-        monthly = yy + m_short          # '26JAN'
-
-        return weekly, monthly          # return both
+        weekly = yy + m_num + dd
+        monthly = yy + m_short
+        return weekly, monthly
     except Exception as e:
         print(f"Date conversion error: {e}")
         return None, None
@@ -125,26 +119,17 @@ def get_current_weekly_expiry(expiry_info):
             expiries.append(((exp - today).days, e["date"]))
         except Exception:
             continue
-    
     expiries = [x for x in expiries if x[0] >= 0]
-    
-    # Optional debug (safe version)
-    print("All future expiries:")
-    for days, date_str in sorted(expiries):
-        print(f"  - {date_str} ({days} days away)")
-    
     if not expiries:
         print("No future expiry found")
         return None
-    
     return sorted(expiries, key=lambda x: x[0])[0][1]
 
 # ================= STRIKE SELECTION =================
 def select_trade_strike(strike, buildup_type):
-    # Same-strike contrarian: buy opposite option at the same strike
-    if buildup_type == "CE":   # short buildup on CE → buy PE at same strike
+    if buildup_type == "CE":
         return strike, "PE"
-    else:                      # short buildup on PE → buy CE at same strike
+    else:
         return strike, "CE"
 
 # ================= SCAN =================
@@ -177,33 +162,39 @@ def scan():
     # Try weekly first
     df_filtered = df[df["symbol"].str.contains(weekly, regex=False, na=False)]
     print(f"After weekly expiry filter: {len(df_filtered)}")
-    if len(df_filtered) > 0:
-        print("First 3 matching symbols after filter:", df_filtered["symbol"].head(3).tolist())
-    else:
-        print("No match in either format — showing first 5 raw symbols:")
-        print([row['symbol'] for row in raw[:5]])
-
     if len(df_filtered) == 0:
-        # Fallback to monthly format
         print("Weekly filter failed — trying monthly format")
         df_filtered = df[df["symbol"].str.contains(monthly, regex=False, na=False)]
         print(f"After monthly expiry filter: {len(df_filtered)}")
 
     df = df_filtered
 
-    # Proceed with strike range
+    # Strike range filter
     df = df[(df["strike_price"] >= atm - STRIKE_RANGE_POINTS) &
             (df["strike_price"] <= atm + STRIKE_RANGE_POINTS)]
 
-    # Now safe to print debug info
-    print(f"Selected expiry date: {expiry_date}")
-    print(f"Total raw options: {len(raw)}")
-    print(f"After strike range filter: {len(df)}")
-    print(f"Number of valid CE/PE rows: {len(df[df['option_type'].isin(['CE', 'PE'])])}")
+    # === NEW: Pre-compute OI % changes for opposite-side & conflict checks ===
+    strike_oi_changes = {}   # strike -> {"CE": pct, "PE": pct}
 
+    for _, r in df.iterrows():
+        strike = int(r.strike_price)
+        opt    = r.option_type
+        oi     = int(r.oi)
+
+        key = f"{opt}_{strike}"
+        entry = baseline["data"].get(key)
+        if entry is None or entry.get("baseline_oi", 0) < MIN_BASE_OI:
+            continue
+
+        base_oi = entry["baseline_oi"]
+        oi_pct  = ((oi - base_oi) / base_oi) * 100 if base_oi > 0 else 0
+
+        if strike not in strike_oi_changes:
+            strike_oi_changes[strike] = {}
+        strike_oi_changes[strike][opt] = oi_pct
+
+    # === Original main loop continues here ===
     updated = False
-
-    # Collect qualifying strikes per side (to group alerts)
     ce_buildups = []
     pe_buildups = []
 
@@ -250,30 +241,47 @@ def scan():
             entry["state"] = "WATCH"
             updated = True
 
-        # ================= EXECUTION =================
-        if oi_pct >= OI_EXEC_THRESHOLD:
-            print(f"Threshold breached for strike : {strike}")
+        # ================= EXECUTION (Enhanced with video-aligned filters) =================
+        # Short buildup confirmation + opposite covering + no both-sides conflict
+        is_short_buildup = (oi_pct >= OI_EXEC_THRESHOLD) and (ltp_change_pct <= PREMIUM_DROP_TOLERANCE)
+
+        if oi_pct >= OI_EXEC_THRESHOLD and is_short_buildup:
             buildup_info = {
                 "strike": strike,
                 "oi_pct": oi_pct,
                 "ltp_change_pct": ltp_change_pct,
                 "vol_ok": vol_ok
             }
-            # Collect instead of immediate send
-            if opt == "CE":
-                ce_buildups.append(buildup_info)
+
+            # Check conflict (both sides building strongly)
+            ce_pct_here = strike_oi_changes.get(strike, {}).get("CE", 0)
+            pe_pct_here = strike_oi_changes.get(strike, {}).get("PE", 0)
+            conflicted = (ce_pct_here >= OI_BOTH_SIDES_AVOID and pe_pct_here >= OI_BOTH_SIDES_AVOID)
+
+            if conflicted:
+                print(f"⛔ Skipping conflicted buildup at {strike}: both sides +{ce_pct_here:.0f}% / +{pe_pct_here:.0f}%")
+                continue
+
+            # Check opposite side covering
+            opp_opt = "PE" if opt == "CE" else "CE"
+            opp_pct = strike_oi_changes.get(strike, {}).get(opp_opt, 0)
+
+            if opp_pct <= OI_COVERING_THRESHOLD:
+                # Valid high-quality signal
+                if opt == "CE":
+                    ce_buildups.append(buildup_info)
+                else:
+                    pe_buildups.append(buildup_info)
+                entry["state"] = "EXECUTED"
+                updated = True
             else:
-                pe_buildups.append(buildup_info)
+                print(f"⚠️ Near miss at {strike} {opt}: OI +{oi_pct:.0f}%, opposite {opp_pct:+.1f}% (needs <= {OI_COVERING_THRESHOLD}%)")
 
-            entry["state"] = "EXECUTED"
-            updated = True
-
-    # Grouped alerts after loop (one per side)
+    # ================= Grouped alerts (original logic) =================
     if ce_buildups:
-        # Pick first qualifying strike for the trade recommendation
         first = ce_buildups[0]
         trade_strike = first["strike"]
-        trade_opt = "PE"  # same-strike contrarian
+        trade_opt = "PE"
 
         details = "\n".join(
             f"{b['strike']} CE: +{b['oi_pct']:.0f}%"
@@ -314,10 +322,8 @@ def scan():
         baseline["first_alert_sent"] = True
         updated = True
 
-    # Save if any changes
+    # Save baseline
     if baseline["data"] or updated:
-        if not baseline["data"]:
-            print("WARNING: Processed rows but no baseline entries added (all OI < MIN_BASE_OI?)")
         save_baseline(baseline)
         print("Baseline saved — entries count:", len(baseline["data"]))
     else:

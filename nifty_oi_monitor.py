@@ -140,9 +140,9 @@ def get_current_weekly_expiry(expiry_info):
 def scan():
     print("▶ Scan started")
 
-    if CHECK_MARKET_HOURS and not is_market_open():
-        print("⏱ Market closed")
-        return
+    # if CHECK_MARKET_HOURS and not is_market_open():
+    #     print("⏱ Market closed")
+    #     return
 
     baseline = reset_on_new_day(load_baseline())
     

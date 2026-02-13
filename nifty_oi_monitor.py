@@ -300,19 +300,18 @@ def scan():
                     continue
                 
                 opp_prev_oi = opp_entry.get("prev_oi", opp_entry.get("baseline_oi", 0))
-                
+                opp_decline_pct = ((opp_current_oi - opp_prev_oi) / opp_prev_oi * 100) if opp_prev_oi > 0 else 0
                 is_covering = (opp_current_oi < opp_prev_oi) and (opp_decline_pct <= MIN_DECLINE_PCT)
                 
-                if is_covering:
-                    print(f"✓ Covering detected at {strike} {opt}: {opp_opt} {opp_decline_pct:.1f}% " f"(current {opp_current_oi} < prev {opp_prev_oi})")
-
+                
                 if not is_covering:
                     opp_pct = strike_oi_changes.get(strike, {}).get(opp_opt, 0)
                     print(f"⚠️ Rejected {strike} {opt}: opposite {opp_opt} not declining (current: {opp_current_oi}, prev: {opp_prev_oi}, {opp_pct:+.1f}%)")
                     continue
                     
-                # Calculate decline percentage for alert
-                opp_decline_pct = ((opp_current_oi - opp_prev_oi) / opp_prev_oi * 100) if opp_prev_oi > 0 else 0
+                # Debug print when covering detected
+                print(f"✓ Covering detected at {strike} {opt}: {opp_opt} {opp_decline_pct:.1f}% "
+                      f"({opp_prev_oi} → {opp_current_oi})")
                 
                 # Valid HIGH QUALITY signal - opposite is unwinding
                 buildup_info = {

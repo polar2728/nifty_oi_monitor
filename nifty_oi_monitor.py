@@ -292,6 +292,7 @@ def calculate_conviction_score(buildup_info, atm, day_open, spot, strike_oi_chan
 
 
 # ================= BASELINE MIGRATION =================
+# ================= BASELINE MIGRATION =================
 def migrate_baseline_if_needed(baseline):
     """
     Automatically migrate old baseline format to new format.
@@ -307,9 +308,24 @@ def migrate_baseline_if_needed(baseline):
     
     # Add entry-level fields if missing
     for key, entry in baseline.get("data", {}).items():
+        entry_migrated = False
+        
+        # Add state if missing
+        if "state" not in entry:
+            entry["state"] = "NONE"
+            entry_migrated = True
+        
+        # Add first_exec_time if missing
         if "first_exec_time" not in entry:
             entry["first_exec_time"] = None
+            entry_migrated = True
+        
+        # Add scan_count if missing
+        if "scan_count" not in entry:
             entry["scan_count"] = 0
+            entry_migrated = True
+        
+        if entry_migrated:
             migrated = True
     
     if migrated:

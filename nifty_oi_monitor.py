@@ -15,17 +15,18 @@ BASELINE_FILE = "baseline_oi.json"
 
 # Quality filters
 OI_BOTH_SIDES_AVOID = 250
-PREMIUM_DROP_TOLERANCE = 5
+PREMIUM_MAX_RISE = 8  # Base tolerance, adjusted dynamically
 MIN_DECLINE_PCT = -1.5
+MIN_CUMULATIVE_DECLINE_PCT = -10  # NEW: For already-unwound positions
 
 # Conviction scoring
 CONVICTION_MODE = os.environ.get("CONVICTION_MODE", "BALANCED").upper()
 CONVICTION_THRESHOLDS = {
-    "STRICT": 110,      # Premium (120+) + top High tier only
-    "BALANCED": 90,     # Premium (120+) + High (90-119)
-    "AGGRESSIVE": 70    # Premium + High + Medium (70-89)
+    "STRICT": 110,
+    "BALANCED": 90,
+    "AGGRESSIVE": 70
 }
-MIN_CONVICTION_SCORE = CONVICTION_THRESHOLDS.get(CONVICTION_MODE, 90)
+MIN_CONVICTION_SCORE_BASE = CONVICTION_THRESHOLDS.get(CONVICTION_MODE, 90)
 
 # Time filters
 TIME_FILTER_START = time(9, 45)
@@ -33,7 +34,8 @@ TIME_FILTER_END = time(15, 0)
 
 # Daily limits
 MAX_SIGNALS_PER_DAY = 3
-SCORE_IMPROVEMENT_THRESHOLD = 10  # Must beat previous by 10 points
+MAX_WATCH_PER_DAY = 3  # NEW: Separate cap for WATCH
+SCORE_IMPROVEMENT_THRESHOLD = 10
 
 # Logging
 SCORE_LOG_FILE = "conviction_scores.jsonl"
@@ -93,7 +95,9 @@ def log_conviction_score(signal_data):
                 "score": signal_data["conviction_score"],
                 "tier": signal_data["tier"],
                 "oi_pct": signal_data["oi_pct"],
-                "opp_decline_pct": signal_data["opp_decline_pct"],
+                "opp_decline_pct": signal_data.get("opp_decline_pct", 0),
+                "days_to_expiry": signal_data.get("days_to_expiry", 0),
+                "signal_type": signal_data.get("signal_type", "EXECUTION"),
                 "components": {
                     "strike_quality": signal_data.get("strike_quality_pts", 0),
                     "volume": signal_data.get("volume_pts", 0),
@@ -102,7 +106,8 @@ def log_conviction_score(signal_data):
                     "decline_streak": signal_data.get("decline_streak_pts", 0),
                     "spot_alignment": signal_data.get("spot_pts", 0),
                     "sustainability": signal_data.get("sustainability_pts", 0),
-                    "cluster": signal_data.get("cluster_pts", 0)
+                    "cluster": signal_data.get("cluster_pts", 0),
+                    "premium_behavior": signal_data.get("premium_behavior_pts", 0)
                 }
             }
             f.write(json.dumps(log_entry) + "\n")
@@ -127,7 +132,8 @@ def create_empty_baseline():
         "first_alert_sent": False,
         "day_open": None,
         "signals_today": 0,
-        "daily_signals": []  # Track all signals with scores
+        "watch_today": 0,  # NEW
+        "daily_signals": []
     }
 
 def save_baseline(b):
@@ -144,6 +150,9 @@ def migrate_baseline_if_needed(baseline):
         migrated = True
     if "signals_today" not in baseline:
         baseline["signals_today"] = 0
+        migrated = True
+    if "watch_today" not in baseline:
+        baseline["watch_today"] = 0
         migrated = True
     if "daily_signals" not in baseline:
         baseline["daily_signals"] = []
@@ -182,6 +191,7 @@ def reset_on_new_day(b):
         b["first_alert_sent"] = False
         b["day_open"] = None
         b["signals_today"] = 0
+        b["watch_today"] = 0
         b["daily_signals"] = []
         save_baseline(b)
     return b
@@ -236,8 +246,10 @@ def get_current_weekly_expiry(expiry_info):
     expiries = [x for x in expiries if x[0] >= 0]
     if not expiries:
         print("No future expiry found")
-        return None
-    return sorted(expiries, key=lambda x: x[0])[0][1]
+        return None, None
+    
+    nearest = sorted(expiries, key=lambda x: x[0])[0]
+    return nearest[1], nearest[0]  # Return (date_string, days_to_expiry)
 
 # ================= CONVICTION SCORING HELPERS =================
 def calculate_buildup_time(entry, current_time):
@@ -287,7 +299,7 @@ def check_adjacent_cluster(strike, opt, strike_oi_changes, exec_threshold):
 def calculate_conviction_score(buildup_data, atm, day_open, spot, strike_oi_changes):
     """
     Calculate conviction score with detailed breakdown
-    Max: 175 points (increased from 150 with new components)
+    Max: 190 points (with premium behavior component)
     Returns: (score, tier, emoji, details, component_scores)
     """
     score = 0
@@ -303,6 +315,7 @@ def calculate_conviction_score(buildup_data, atm, day_open, spot, strike_oi_chan
     scan_count = buildup_data['scan_count']
     decline_streak = buildup_data.get('decline_streak', 0)
     exec_threshold = buildup_data.get('exec_threshold', 500)
+    ltp_change_pct = buildup_data.get('ltp_change_pct', 0)
     
     # A. Strike Quality (0-30 points)
     strike_distance = abs(strike - atm)
@@ -369,7 +382,7 @@ def calculate_conviction_score(buildup_data, atm, day_open, spot, strike_oi_chan
     score += pts
     components['decline_pts'] = pts
     
-    # D2. Sustained Decline Bonus (0-20 points) - NEW
+    # D2. Sustained Decline Bonus (0-20 points)
     if decline_streak >= 3:
         pts = 20
         details.append(f"✓ Sustained decline {decline_streak} scans (+20)")
@@ -424,7 +437,7 @@ def calculate_conviction_score(buildup_data, atm, day_open, spot, strike_oi_chan
     score += pts
     components['sustainability_pts'] = pts
     
-    # G. Adjacent Strike Cluster (0-20 points) - ENHANCED
+    # G. Adjacent Strike Cluster (0-20 points)
     adj_same, adj_opp = check_adjacent_cluster(strike, opt, strike_oi_changes, exec_threshold)
     
     if adj_same >= 3 or adj_opp >= 2:
@@ -438,6 +451,26 @@ def calculate_conviction_score(buildup_data, atm, day_open, spot, strike_oi_chan
         details.append("○ Isolated strike (+0)")
     score += pts
     components['cluster_pts'] = pts
+
+    # H. Premium Behavior (0-15 points) - NEW
+    # Validates true short buildup vs delta/gamma effects
+    if ltp_change_pct <= -5:
+        pts = 15
+        details.append(f"✓ Premium falling {ltp_change_pct:.1f}% (+15)")
+    elif ltp_change_pct <= 0:
+        pts = 10
+        details.append(f"✓ Premium flat {ltp_change_pct:.1f}% (+10)")
+    elif ltp_change_pct <= 5:
+        pts = 5
+        details.append(f"○ Slight rise {ltp_change_pct:.1f}% (+5)")
+    elif ltp_change_pct <= PREMIUM_MAX_RISE:
+        pts = 0
+        details.append(f"○ Rising {ltp_change_pct:.1f}% (+0)")
+    else:
+        pts = -10
+        details.append(f"✗ High rise {ltp_change_pct:.1f}% (-10)")
+    score += pts
+    components['premium_behavior_pts'] = pts
     
     # Determine tier
     if score >= 120:
@@ -517,8 +550,8 @@ def scan():
             send_telegram_alert(
                 f"✅ *NIFTY OI MONITOR STARTED*\n"
                 f"Spot: {spot}\nATM: {atm}\n"
-                f"Mode: {CONVICTION_MODE} ({MIN_CONVICTION_SCORE}+ score)\n"
-                f"Daily limit: {MAX_SIGNALS_PER_DAY} signals"
+                f"Mode: {CONVICTION_MODE} ({MIN_CONVICTION_SCORE_BASE}+ base score)\n"
+                f"Limits: {MAX_SIGNALS_PER_DAY} signals, {MAX_WATCH_PER_DAY} watch/day"
             )
             baseline["first_alert_sent"] = True
             save_baseline(baseline)
@@ -542,13 +575,45 @@ def scan():
         print(f"📊 Day open captured: {spot}")
 
     raw, expiry_info = fetch_option_chain()
-    expiry_date = get_current_weekly_expiry(expiry_info)
-    if not expiry_date:
+    expiry_result = get_current_weekly_expiry(expiry_info)
+    if not expiry_result:
         return
+    
+    expiry_date, days_to_expiry = expiry_result
 
     weekly, monthly = expiry_to_symbol_format(expiry_date)
     if weekly is None:
         return
+
+    # Dynamic conviction requirements based on days to expiry (weekly)
+    if days_to_expiry >= 4:
+        MIN_CONVICTION_SCORE = MIN_CONVICTION_SCORE_BASE
+        print(f"Days to expiry: {days_to_expiry} → Early week ({MIN_CONVICTION_SCORE_BASE}+ score)")
+    elif days_to_expiry >= 2:
+        MIN_CONVICTION_SCORE = MIN_CONVICTION_SCORE_BASE
+        print(f"Days to expiry: {days_to_expiry} → Mid-week ({MIN_CONVICTION_SCORE_BASE}+ score)")
+    elif days_to_expiry == 1:
+        MIN_CONVICTION_SCORE = 100
+        print(f"Days to expiry: {days_to_expiry} → Pre-expiry (100+ score)")
+    else:
+        MIN_CONVICTION_SCORE = 120
+        print(f"Days to expiry: {days_to_expiry} → Expiry day (120+ PREMIUM only)")
+
+    # Calculate dynamic premium tolerance based on spot move
+    spot_move_pct = 0
+    if baseline.get("day_open"):
+        spot_move_pct = ((spot - baseline["day_open"]) / baseline["day_open"]) * 100
+    
+    abs_spot_move = abs(spot_move_pct)
+    if abs_spot_move >= 0.5:
+        PREMIUM_TOLERANCE = 15
+        print(f"Spot move {abs_spot_move:.2f}% → Premium tolerance: 15%")
+    elif abs_spot_move >= 0.3:
+        PREMIUM_TOLERANCE = 10
+        print(f"Spot move {abs_spot_move:.2f}% → Premium tolerance: 10%")
+    else:
+        PREMIUM_TOLERANCE = PREMIUM_MAX_RISE
+        print(f"Spot move {abs_spot_move:.2f}% → Premium tolerance: {PREMIUM_MAX_RISE}%")
 
     df = pd.DataFrame(raw)
     df_filtered = df[df["symbol"].str.contains(weekly, regex=False, na=False)]
@@ -628,14 +693,34 @@ def scan():
         ltp_change_pct = ((ltp - base_ltp) / base_ltp * 100) if base_ltp > 0 else 0
         vol_multiplier = vol / base_vol if base_vol > 0 else 1
 
-        # WATCH alerts
+        # ================= WATCH (WITH FILTERS) =================
         if oi_pct >= OI_WATCH_THRESHOLD and state == "NONE":
-            send_telegram_alert(
-                f"👀 *OI WATCH*\n"
-                f"{strike} {opt}\n"
-                f"OI +{oi_pct:.0f}%\n"
-                f"Spot: {spot}"
-            )
+            # Basic quality filters for WATCH
+            ce_pct = strike_oi_changes.get(strike, {}).get("CE", 0)
+            pe_pct = strike_oi_changes.get(strike, {}).get("PE", 0)
+            conflicted = (ce_pct >= OI_BOTH_SIDES_AVOID and pe_pct >= OI_BOTH_SIDES_AVOID)
+            
+            # Strike proximity filter
+            too_far_otm = abs(strike - atm) > 100
+            
+            # Daily cap for WATCH
+            watch_limit_hit = baseline.get("watch_today", 0) >= MAX_WATCH_PER_DAY
+            
+            if not conflicted and not too_far_otm and not watch_limit_hit:
+                send_telegram_alert(
+                    f"👁 *OI WATCH*\n"
+                    f"{strike} {opt}\n"
+                    f"OI +{oi_pct:.0f}%\n"
+                    f"Not actionable yet - monitoring\n"
+                    f"Spot: {spot}"
+                )
+                baseline["watch_today"] = baseline.get("watch_today", 0) + 1
+                updated = True
+            elif watch_limit_hit and DEBUG_MODE:
+                print(f"⏸ WATCH suppressed: daily limit ({MAX_WATCH_PER_DAY})")
+            elif conflicted and DEBUG_MODE:
+                print(f"⏸ WATCH suppressed: conflicted at {strike}")
+            
             entry["state"] = "WATCH"
             updated = True
 
@@ -654,11 +739,12 @@ def scan():
                 entry["scan_count"] = 0
                 updated = True
 
-        # EXECUTION checks
+        # ================= EXECUTION =================
         if state == "EXECUTED":
             continue
 
-        is_aggressive_writing = (oi_pct >= OI_EXEC_THRESHOLD) and (ltp_change_pct <= PREMIUM_DROP_TOLERANCE)
+        # Use dynamic premium tolerance
+        is_aggressive_writing = (oi_pct >= OI_EXEC_THRESHOLD) and (ltp_change_pct <= PREMIUM_TOLERANCE)
 
         if is_aggressive_writing:
             # Conflict check
@@ -670,7 +756,7 @@ def scan():
                 print(f"⛔ Skipping conflicted: CE +{ce_pct_here:.0f}%, PE +{pe_pct_here:.0f}%")
                 continue
 
-            # Covering check
+            # ================= DUAL DECLINE CHECK (NEW) =================
             opp_opt = "PE" if opt == "CE" else "CE"
             opp_key = f"{opp_opt}_{strike}"
             opp_entry = baseline["data"].get(opp_key)
@@ -685,21 +771,37 @@ def scan():
                 continue
 
             opp_prev_oi = opp_entry.get("prev_oi", opp_entry.get("baseline_oi", 0))
+            opp_baseline_oi = opp_entry.get("baseline_oi", 0)
+
+            # Calculate both scan-to-scan and cumulative declines
             opp_decline_pct = ((opp_current_oi - opp_prev_oi) / opp_prev_oi * 100) if opp_prev_oi > 0 else 0
-            is_covering = (opp_current_oi < opp_prev_oi) and (opp_decline_pct <= MIN_DECLINE_PCT)
+            opp_cumulative_decline_pct = ((opp_current_oi - opp_baseline_oi) / opp_baseline_oi * 100) if opp_baseline_oi > 0 else 0
+
+            # Check EITHER scan-to-scan decline OR significant cumulative unwinding
+            scan_to_scan_covering = (opp_current_oi < opp_prev_oi) and (opp_decline_pct <= MIN_DECLINE_PCT)
+            already_unwound = opp_cumulative_decline_pct <= MIN_CUMULATIVE_DECLINE_PCT
+
+            is_covering = scan_to_scan_covering or already_unwound
 
             if not is_covering:
                 # Reset decline streak
                 opp_entry["decline_streak"] = 0
                 updated = True
-                print(f"⚠️ Rejected: opposite not declining ({opp_decline_pct:+.1f}%)")
+                print(f"⚠️ Rejected {strike} {opt}: opposite not covering")
+                print(f"   Scan-to-scan: {opp_decline_pct:+.2f}% (need <= {MIN_DECLINE_PCT}%)")
+                print(f"   Cumulative: {opp_cumulative_decline_pct:+.2f}% (need <= {MIN_CUMULATIVE_DECLINE_PCT}%)")
                 continue
 
             # Update decline streak
             opp_entry["decline_streak"] = opp_entry.get("decline_streak", 0) + 1
             updated = True
 
-            print(f"✓ Covering detected: {opp_opt} {opp_decline_pct:.1f}% ({opp_prev_oi} → {opp_current_oi})")
+            # Use the more significant decline for scoring
+            opp_decline_for_scoring = min(opp_decline_pct, opp_cumulative_decline_pct)
+
+            print(f"✓ Covering detected: {opp_opt} {opp_decline_for_scoring:.1f}%")
+            print(f"  Scan-to-scan: {opp_decline_pct:+.2f}%, Cumulative: {opp_cumulative_decline_pct:+.2f}%")
+            print(f"  ({opp_prev_oi:,} → {opp_current_oi:,})")
             print(f"  Decline streak: {opp_entry['decline_streak']} scans")
 
             # Prepare buildup data for scoring
@@ -709,11 +811,12 @@ def scan():
                 "oi_pct": oi_pct,
                 "ltp_change_pct": ltp_change_pct,
                 "vol_multiplier": vol_multiplier,
-                "opp_decline_pct": opp_decline_pct,
+                "opp_decline_pct": opp_decline_for_scoring,
                 "decline_streak": opp_entry["decline_streak"],
                 "buildup_time_mins": calculate_buildup_time(entry, current_time),
                 "scan_count": entry.get("scan_count", 1),
-                "exec_threshold": OI_EXEC_THRESHOLD
+                "exec_threshold": OI_EXEC_THRESHOLD,
+                "days_to_expiry": days_to_expiry
             }
 
             # Calculate conviction score
@@ -790,7 +893,7 @@ def scan():
 
             msg = (
                 f"{buildup['emoji']} *EXECUTION SIGNAL - {buildup['opt_type']} BUILDUP*\n"
-                f"*Tier: {buildup['tier']} | Score: {buildup['conviction_score']}/175*\n"
+                f"*Tier: {buildup['tier']} | Score: {buildup['conviction_score']}/190*\n"
             )
             
             if is_replacement:
@@ -800,6 +903,7 @@ def scan():
                 f"\n*Action: Buy {buildup['strike']} {buildup['trade_opt']}*\n\n"
                 f"📊 *Score Breakdown:*\n{score_breakdown}\n\n"
                 f"OI: +{buildup['oi_pct']:.0f}% | Opp: {buildup['opp_decline_pct']:.1f}%\n"
+                f"Premium: {buildup['ltp_change_pct']:+.1f}%\n"
                 f"Spot: {spot}\n"
                 f"Signals today: {baseline.get('signals_today', 0) + 1}/{MAX_SIGNALS_PER_DAY}"
             )
@@ -810,6 +914,7 @@ def scan():
             record_signal(baseline, buildup)
             
             # Log for calibration
+            buildup["signal_type"] = "EXECUTION"
             log_conviction_score(buildup)
             
             updated = True
@@ -822,6 +927,7 @@ def scan():
             buildup_copy = buildup.copy()
             buildup_copy["skipped"] = True
             buildup_copy["skip_reason"] = reason
+            buildup_copy["signal_type"] = "EXECUTION_SKIPPED"
             log_conviction_score(buildup_copy)
 
     # Save baseline

@@ -34,7 +34,7 @@ TIME_FILTER_END = time(15, 0)
 
 # Daily limits
 MAX_SIGNALS_PER_DAY = 3
-MAX_WATCH_PER_DAY = 3  # NEW: Separate cap for WATCH
+MAX_WATCH_PER_DAY = 30  # NEW: Separate cap for WATCH
 SCORE_IMPROVEMENT_THRESHOLD = 10
 
 # Logging
@@ -694,7 +694,7 @@ def scan():
         vol_multiplier = vol / base_vol if base_vol > 0 else 1
 
         # ================= WATCH (WITH FILTERS) =================
-        if oi_pct >= OI_WATCH_THRESHOLD and state == "NONE":
+        if oi_pct >= OI_WATCH_THRESHOLD:
             # Basic quality filters for WATCH
             ce_pct = strike_oi_changes.get(strike, {}).get("CE", 0)
             pe_pct = strike_oi_changes.get(strike, {}).get("PE", 0)
@@ -740,8 +740,8 @@ def scan():
                 updated = True
 
         # ================= EXECUTION =================
-        if state == "EXECUTED":
-            continue
+        # if state == "EXECUTED":
+        #     continue
 
         # Use dynamic premium tolerance
         is_aggressive_writing = (oi_pct >= OI_EXEC_THRESHOLD) and (ltp_change_pct <= PREMIUM_TOLERANCE)
